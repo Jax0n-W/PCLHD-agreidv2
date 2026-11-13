@@ -18,8 +18,13 @@ REQUIRED = (
     "_train_agreid_three_domain_engine.py",
     "scripts/run_all_ablations.py",
     "scripts/test_all_checkpoints.py",
+    "clustercontrast/datasets/agreidv2_ir.py",
+    "clustercontrast/datasets/agreidv2_rgb.py",
+    "examples/PCLHD_AGReIDv2_test.py",
+    "tools/preflight_agreidv2.py",
     "tests/test_release_configuration.py",
     "tests/test_agreid_identity.py",
+    "tests/test_agreidv2_support.py",
     "view_scores/agreid_aerial_view_scores_foreground.csv",
 )
 FORBIDDEN_SUFFIXES = (
@@ -56,7 +61,9 @@ def main():
         "_train_agreid_engine.py": "parse_agreid_name",
         "clustercontrast/datasets/agreid_ir.py": "parse_agreid_name",
         "clustercontrast/datasets/agreid_rgb.py": "parse_agreid_name",
+        "clustercontrast/datasets/_agreidv2.py": "parse_agreid_name",
         "examples/PCLHD_AGReID_g2ag.py": "parse_agreid_name",
+        "examples/PCLHD_AGReIDv2_test.py": "parse_agreidv2_manifest",
         "tools/generate_evaluation_protocols.py": "parse_agreid_name",
     }
     for relative, symbol in identity_consumers.items():

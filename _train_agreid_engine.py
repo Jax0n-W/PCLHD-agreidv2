@@ -20,7 +20,8 @@ import torch.nn.functional as F
 from clustercontrast import datasets
 from clustercontrast import models
 from agreid_identity import (
-    AGREID_TEST_IDENTITIES, parse_agreid_name)
+    AGREID_TEST_IDENTITIES, DATASET_SPECS, parse_agreid_name,
+    parse_agreidv2_manifest)
 from clustercontrast.models.cm import ClusterMemory
 from clustercontrast.trainers import ClusterContrastTrainer_DCL, ClusterContrastTrainer_PCLMP
 from clustercontrast.trainers_no_ema_loss import ClusterContrastTrainer_PCLMP_NoEMALoss
@@ -49,10 +50,42 @@ from collections import Counter
 from scipy.optimize import linear_sum_assignment
 start_epoch = best_mAP = 0
 
+TRAIN_DATASETS = {
+    'agreid': ('agreid_ir', 'agreid_rgb'),
+    'agreidv2': ('agreidv2_ir', 'agreidv2_rgb'),
+}
+
 def get_data(name, data_dir,trial=0):
     root = osp.join(data_dir, name)
     dataset = datasets.create(name, root,trial=trial)
     return dataset
+
+
+def get_training_dataset_names(dataset_key):
+    try:
+        return TRAIN_DATASETS[dataset_key]
+    except KeyError:
+        raise ValueError(
+            'Unknown dataset key {!r}; expected one of {}'.format(
+                dataset_key, ', '.join(sorted(TRAIN_DATASETS))))
+
+
+def _sample_modality(fname, cid, dataset_key):
+    """Return model modal 1 (ground) or 2 (aerial)."""
+    if dataset_key == 'agreid':
+        if 'aerial_modify' in fname:
+            return 2
+        if 'ground_modify' in fname:
+            return 1
+        raise AssertionError('Cannot infer AG-ReID.v1 domain: {}'.format(fname))
+    parsed = parse_agreid_name(fname)
+    if parsed.camid == 0:
+        return 2
+    if parsed.camid in (2, 3):
+        return 1
+    raise AssertionError(
+        'Unsupported AG-ReID.v2 camera C{}: {}'.format(
+            parsed.camid, fname))
 def check_feature_rows_finite(name, tensor, samples, epoch, enabled):
     """Stop before clustering/Memory and report the exact bad feature row."""
     if not enabled:
@@ -287,6 +320,26 @@ class TestData(data.Dataset):
     def __len__(self):
         return len(self.test_image)
 
+
+class LazyTestData(data.Dataset):
+    """Path-backed v2 evaluator that avoids materializing all images."""
+    def __init__(self, test_img_file, test_label, transform=None,
+                 img_size=(144, 288)):
+        self.test_img_file = list(test_img_file)
+        self.test_label = test_label
+        self.transform = transform
+        self.img_size = img_size
+
+    def __getitem__(self, index):
+        with Image.open(self.test_img_file[index]) as img:
+            img = img.resize(
+                (self.img_size[0], self.img_size[1]), Image.LANCZOS)
+            image = np.array(img)
+        return self.transform(image), self.test_label[index]
+
+    def __len__(self):
+        return len(self.test_img_file)
+
 def fliplr(img):
     '''flip horizontal'''
     inv_idx = torch.arange(img.size(3)-1,-1,-1).long()  # N x C x H x W
@@ -344,7 +397,25 @@ def extract_query_feat(model,query_loader,nquery):
     return query_feat_fc
 
 
-def process_test_regdb(img_dir, trial = 1, modal = 'visible'):
+def process_test_regdb(img_dir, trial=1, modal='visible',
+                       dataset_key='agreid'):
+    if dataset_key == 'agreidv2':
+        query, gallery = parse_agreidv2_manifest(
+            img_dir, 'exp4', validate=True)
+        if any(entry.camid != 3 for entry in query):
+            raise RuntimeError(
+                'AG-ReID.v2 exp4 query must contain only CCTV C3 images')
+        if any(entry.camid != 0 for entry in gallery):
+            raise RuntimeError(
+                'AG-ReID.v2 exp4 gallery must contain only aerial C0 images')
+        entries = query if modal == 'visible' else gallery
+        if modal not in ('visible', 'thermal'):
+            raise ValueError('Unknown test modal: {}'.format(modal))
+        return ([entry.path for entry in entries],
+                np.array([entry.pid for entry in entries]))
+    if dataset_key != 'agreid':
+        raise ValueError('Unknown dataset key: {}'.format(dataset_key))
+
     if modal=='visible':
         input_data_path = osp.join(img_dir, 'idx/test_visible_{}.txt'.format(trial))
     elif modal=='thermal':
@@ -433,7 +504,8 @@ def eval_regdb(distmat, q_pids, g_pids, max_rank = 20):
     mINP = np.mean(all_INP)
     return all_cmc, mAP, mINP
 
-def associated_analysis_for_all(all_origin, all_pred, image_paths_for_all, log_dir):
+def associated_analysis_for_all(all_origin, all_pred, image_paths_for_all,
+                                log_dir, dataset_key='agreid'):
     label_count_all = -1
     all_label_set = list(set(all_pred))
     all_label_set.sort()
@@ -448,10 +520,12 @@ def associated_analysis_for_all(all_origin, all_pred, image_paths_for_all, log_d
         flag_rgb = 0
         for idx, lab in enumerate(all_pred):
             if lab_ == lab:
-                if 'aerial_modify' in image_paths_for_all[idx]:
+                if _sample_modality(
+                        image_paths_for_all[idx], None, dataset_key) == 2:
                     flag_ir = 1
                     flag_ir_list[idx_] = 1
-                elif 'ground_modify' in image_paths_for_all[idx]:
+                elif _sample_modality(
+                        image_paths_for_all[idx], None, dataset_key) == 1:
                     flag_rgb = 1
                     flag_rgb_list[idx_] = 1
         class_NIRVIS_list_modal_all.extend([class_NIRVIS_list_modal])
@@ -492,6 +566,10 @@ def check_experiment_output_directory(output_dir, allow_overwrite=False):
 
 def main():
     args = parser.parse_args()
+    if args.dataset_key == 'agreidv2' and args.use_dynamic_agva:
+        raise ValueError(
+            'AG-ReID.v2 currently supports baseline only; its D-AGVA masks '
+            'and three-domain view scores are not prepared')
     validate_dynamic_agva_args(args)
     print_dynamic_agva_config(args)
     args.logs_root = osp.abspath(osp.expanduser(args.logs_dir))
@@ -556,8 +634,9 @@ def main_worker_stage1(args,log_s1_name):
     iters = args.iters if (args.iters > 0) else None
     print("==> Load unlabeled dataset")
     # AG-ReID: aerial (C00) -> IR, ground (C03) -> RGB
-    dataset_ir = get_data('agreid_ir', args.data_dir,trial=trial)
-    dataset_rgb = get_data('agreid_rgb', args.data_dir,trial=trial)
+    ir_name, rgb_name = get_training_dataset_names(args.dataset_key)
+    dataset_ir = get_data(ir_name, args.data_dir,trial=trial)
+    dataset_rgb = get_data(rgb_name, args.data_dir,trial=trial)
 
 
     test_loader_ir = get_test_loader(dataset_ir, args.height, args.width, args.batch_size, args.workers)
@@ -628,6 +707,7 @@ def main_worker_stage1(args,log_s1_name):
                 print('WARNING: IR clustering failed after {} attempts, assigning all samples to cluster 0'.format(max_attempts))
                 pseudo_labels_ir = np.zeros(len(features_ir), dtype=np.int32)
                 num_cluster_ir = 1
+            del rerank_dist_ir
 
             # Adaptive clustering for RGB
             rerank_dist_rgb = compute_jaccard_distance(features_rgb, k1=args.k1, k2=args.k2,search_option=3)
@@ -645,6 +725,7 @@ def main_worker_stage1(args,log_s1_name):
                 print('WARNING: RGB clustering failed after {} attempts, assigning all samples to cluster 0'.format(max_attempts))
                 pseudo_labels_rgb = np.zeros(len(features_rgb), dtype=np.int32)
                 num_cluster_rgb = 1
+            del rerank_dist_rgb
             if args.num_instances > 0:
                 min_clusters = max(
                     1, (args.batch_size + args.num_instances - 1)
@@ -659,9 +740,6 @@ def main_worker_stage1(args,log_s1_name):
                 raise RuntimeError(
                     'RGB clustering collapsed: clusters={}, required={}'
                     .format(num_cluster_rgb, min_clusters))
-
-            del rerank_dist_rgb
-            del rerank_dist_ir
 
         # generate new dataset and calculate cluster centers
         @torch.no_grad()
@@ -818,14 +896,24 @@ def main_worker_stage1(args,log_s1_name):
             mode='all'
             data_path=data_dir
             # AG-ReID: visible (ground/C03) -> query, thermal (aerial/C00) -> gallery
-            query_img, query_label = process_test_regdb(data_path, trial=trial, modal='visible')
-            gall_img, gall_label = process_test_regdb(data_path, trial=trial, modal='thermal')
+            query_img, query_label = process_test_regdb(
+                data_path, trial=trial, modal='visible',
+                dataset_key=args.dataset_key)
+            gall_img, gall_label = process_test_regdb(
+                data_path, trial=trial, modal='thermal',
+                dataset_key=args.dataset_key)
 
-            gallset = TestData(gall_img, gall_label, transform=transform_test, img_size=(args.img_w, args.img_h))
+            test_data_class = (
+                LazyTestData if args.dataset_key == 'agreidv2' else TestData)
+            gallset = test_data_class(
+                gall_img, gall_label, transform=transform_test,
+                img_size=(args.img_w, args.img_h))
             gall_loader = data.DataLoader(gallset, batch_size=args.test_batch, shuffle=False, num_workers=args.workers)
             nquery = len(query_label)
             ngall = len(gall_label)
-            queryset = TestData(query_img, query_label, transform=transform_test, img_size=(args.img_w, args.img_h))
+            queryset = test_data_class(
+                query_img, query_label, transform=transform_test,
+                img_size=(args.img_w, args.img_h))
             query_loader = data.DataLoader(queryset, batch_size=args.test_batch, shuffle=False, num_workers=4)
             query_feat_fc = extract_query_feat(model,query_loader,nquery)
             # for trial in range(1):
@@ -882,8 +970,9 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
     # Create datasets
     iters = args.iters if (args.iters > 0) else None
     print("==> Load unlabeled dataset")
-    dataset_ir = get_data('agreid_ir', args.data_dir,trial=trial)
-    dataset_rgb = get_data('agreid_rgb', args.data_dir,trial=trial)
+    ir_name, rgb_name = get_training_dataset_names(args.dataset_key)
+    dataset_ir = get_data(ir_name, args.data_dir,trial=trial)
+    dataset_rgb = get_data(rgb_name, args.data_dir,trial=trial)
 
     test_loader_ir = get_test_loader(dataset_ir, args.height, args.width, args.batch_size, args.workers)
     test_loader_rgb = get_test_loader(dataset_rgb, args.height, args.width, args.batch_size, args.workers)
@@ -981,6 +1070,7 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
                 print('WARNING: Stage2 IR clustering failed, assigning all samples to cluster 0')
                 pseudo_labels_ir = np.zeros(len(features_ir), dtype=np.int32)
                 num_cluster_ir = 1
+            del rerank_dist_ir
 
             # Adaptive clustering for RGB
             rerank_dist_rgb = compute_jaccard_distance(features_rgb, k1=args.k1, k2=args.k2,search_option=3)
@@ -997,11 +1087,18 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
                 print('WARNING: Stage2 RGB clustering failed, assigning all samples to cluster 0')
                 pseudo_labels_rgb = np.zeros(len(features_rgb), dtype=np.int32)
                 num_cluster_rgb = 1
+            del rerank_dist_rgb
 
             # Adaptive clustering for ALL
+            all_modalities = None
+            if args.dataset_key == 'agreidv2':
+                all_modalities = (
+                    [1] * len(dataset_rgb.train)
+                    + [2] * len(dataset_ir.train))
             rerank_dist_all = compute_modal_invariant_jaccard_distance(features_all, k1=40, k2=32,
                                                                        file=sorted(dataset_rgb.train) + sorted(
-                                                                           dataset_ir.train), search_option=3)
+                                                                           dataset_ir.train), search_option=3,
+                                                                       modalities=all_modalities)
             attempt = 0
             while attempt < max_attempts:
                 pseudo_labels_all = cluster_all.fit_predict(rerank_dist_all)
@@ -1015,9 +1112,6 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
                 print('WARNING: Stage2 ALL clustering failed, assigning all samples to cluster 0')
                 pseudo_labels_all = np.zeros(len(features_all), dtype=np.int32)
                 num_cluster_all = 1
-
-            del rerank_dist_rgb
-            del rerank_dist_ir
             del rerank_dist_all
 
         # generate new dataset and calculate cluster centers
@@ -1050,9 +1144,9 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
             for i, (label, (fname, _, cid)) in enumerate(zip(labels, file)):
                 if label == -1:
                     continue
-                if 'aerial_modify' in fname:
+                if _sample_modality(fname, cid, args.dataset_key) == 2:
                     centers_IR[labels[i]].append(features[i])
-                elif 'ground_modify' in fname:
+                elif _sample_modality(fname, cid, args.dataset_key) == 1:
                     centers_RBG[labels[i]].append(features[i])
                 else:
                     raise AssertionError
@@ -1173,8 +1267,9 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
                 all_file_name.append(fname)
                 all_label.append(label.item())
 
-        flag_ir_list, flag_rgb_list = associated_analysis_for_all(pseudo_labels_all, all_label, all_file_name,
-                                                                  args.logs_dir)
+        flag_ir_list, flag_rgb_list = associated_analysis_for_all(
+            pseudo_labels_all, all_label, all_file_name, args.logs_dir,
+            dataset_key=args.dataset_key)
         print('==> Statistics for ALL epoch {}: {} clusters'.format(epoch, num_cluster_all))
 
         all_label = []
@@ -1190,7 +1285,10 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
             if label != -1:
                 all_file_name.append(fname)
                 all_label.append(label.item())
-            if 'aerial_modify' in fname and flag_ir_list[label] == 1 and flag_rgb_list[label] == 1:
+            sample_modal = _sample_modality(
+                fname, cid, args.dataset_key)
+            if (sample_modal == 2 and flag_ir_list[label] == 1
+                    and flag_rgb_list[label] == 1):
                 train_fname, used_agva, fallback_missing = maybe_use_agva_path(
                     fname, args, stage2_all_ir_agva_rng
                 )
@@ -1206,7 +1304,8 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
                     stage2_all_ir_original_count += 1
                 if fallback_missing:
                     stage2_all_ir_fallback_count += 1
-            elif 'ground_modify' in fname and flag_ir_list[label] == 1 and flag_rgb_list[label] == 1:
+            elif (sample_modal == 1 and flag_ir_list[label] == 1
+                  and flag_rgb_list[label] == 1):
                 pseudo_labeled_dataset_all_rgb.append((fname, label.item(), cid))
         print(
             "[Stage2 ALL-IR AGVA] augmented={}, original={}, missing_fallback={}".format(
@@ -1339,14 +1438,24 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
 
             data_path=data_dir
             # AG-ReID: visible (ground/C03) -> query, thermal (aerial/C00) -> gallery
-            query_img, query_label = process_test_regdb(data_path, trial=trial, modal='visible')
-            gall_img, gall_label = process_test_regdb(data_path, trial=trial, modal='thermal')
+            query_img, query_label = process_test_regdb(
+                data_path, trial=trial, modal='visible',
+                dataset_key=args.dataset_key)
+            gall_img, gall_label = process_test_regdb(
+                data_path, trial=trial, modal='thermal',
+                dataset_key=args.dataset_key)
 
-            gallset = TestData(gall_img, gall_label, transform=transform_test, img_size=(args.img_w, args.img_h))
+            test_data_class = (
+                LazyTestData if args.dataset_key == 'agreidv2' else TestData)
+            gallset = test_data_class(
+                gall_img, gall_label, transform=transform_test,
+                img_size=(args.img_w, args.img_h))
             gall_loader = data.DataLoader(gallset, batch_size=args.test_batch, shuffle=False, num_workers=args.workers)
             nquery = len(query_label)
             ngall = len(gall_label)
-            queryset = TestData(query_img, query_label, transform=transform_test, img_size=(args.img_w, args.img_h))
+            queryset = test_data_class(
+                query_img, query_label, transform=transform_test,
+                img_size=(args.img_w, args.img_h))
             query_loader = data.DataLoader(queryset, batch_size=args.test_batch, shuffle=False, num_workers=4)
             query_feat_fc = extract_query_feat(model_ema,query_loader,nquery)
             # for trial in range(1):
@@ -1388,6 +1497,10 @@ if __name__ == '__main__':
     # data
     parser.add_argument('-d', '--dataset', type=str, default='agreid_ir',
                         choices=datasets.names())
+    parser.add_argument(
+        '--dataset-key', choices=tuple(sorted(DATASET_SPECS)),
+        default='agreid',
+        help='AG-ReID dataset generation; default preserves v1 behavior')
     parser.add_argument('-b', '--batch-size', type=int, default=2)
     parser.add_argument('--test-batch', type=int, default=64, help="test batch size for feature extraction")
     parser.add_argument('-j', '--workers', type=int, default=8)

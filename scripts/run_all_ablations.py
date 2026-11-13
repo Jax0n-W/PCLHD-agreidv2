@@ -24,6 +24,9 @@ def build_parser():
         description="Run channel-off AG-ReID.v1 D/T ablations")
     parser.add_argument("--gpu", default="0")
     parser.add_argument(
+        "--dataset-key", choices=("agreid", "agreidv2"),
+        default="agreid")
+    parser.add_argument(
         "--experiments", nargs="+", choices=ALL_EXPERIMENTS,
         default=list(ALL_EXPERIMENTS))
     parser.add_argument(
@@ -77,6 +80,8 @@ def common_args(args):
         result.append("--allow-log-overwrite")
     if args.dry_run:
         result.append("--dry-run")
+    if args.dataset_key != "agreid":
+        result += ["--dataset-key", args.dataset_key]
     return result
 
 
@@ -87,8 +92,9 @@ def run(command, env, dry_run):
 
 
 def stage1_checkpoint(args, dynamic):
-    log_name = "agreid_dt_s1_d{}_channel_off_seed{}".format(
-        int(dynamic), args.seed)
+    prefix = "agreidv2_dt" if args.dataset_key == "agreidv2" else "agreid_dt"
+    log_name = "{}_s1_d{}_channel_off_seed{}".format(
+        prefix, int(dynamic), args.seed)
     return osp.join(
         osp.abspath(osp.expanduser(args.logs_dir)), log_name,
         str(args.trial), "model_best.pth.tar")
@@ -97,6 +103,11 @@ def stage1_checkpoint(args, dynamic):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     selected = list(dict.fromkeys(args.experiments))
+    if (args.dataset_key == "agreidv2"
+            and any(name != "baseline" for name in selected)):
+        raise ValueError(
+            "AG-ReID.v2 currently supports baseline only; D-AGVA masks and "
+            "three-domain view scores for v2 are not prepared")
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
     env.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")

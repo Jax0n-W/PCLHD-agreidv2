@@ -23,18 +23,27 @@ class AGReIDIdentityTests(unittest.TestCase):
         parsed = parse_agreid_name("P0000T02140A0C0F121.jpg")
         self.assertEqual(parsed.pid, int("0000" + "02140" + "0"))
         self.assertEqual(parsed.camid, 0)
+        self.assertEqual(parsed.encoded_camid, 0)
         self.assertEqual(parsed.source, "official")
+
+    def test_v2_filename_has_raw_and_encoded_camera(self):
+        parsed = parse_agreid_name("P0313T02220A1C2F11011.jpg")
+        self.assertEqual(parsed.pid, int("0313" + "02220" + "1"))
+        self.assertEqual(parsed.camid, 2)
+        self.assertEqual(parsed.encoded_camid, 12)
 
     def test_rewritten_filename_recovers_a_from_encoded_camera(self):
         parsed = parse_agreid_name("P0034_T02210_C10_F19471.jpg")
         self.assertEqual(parsed.pid, int("0034" + "02210" + "1"))
         self.assertEqual(parsed.camid, 10)
+        self.assertEqual(parsed.encoded_camid, 10)
         self.assertEqual(parsed.source, "rewritten")
 
     def test_official_and_rewritten_names_match(self):
         official = parse_agreid_name("P0001T04041A0C0F121.jpg")
         rewritten = parse_agreid_name("P0001_T04041_C00_F121.jpg")
         self.assertEqual(official.pid, rewritten.pid)
+        self.assertEqual(official.encoded_camid, rewritten.encoded_camid)
 
     def test_same_p_can_represent_different_identities(self):
         first = parse_agreid_name("P0001T04041A0C0F121.jpg").pid

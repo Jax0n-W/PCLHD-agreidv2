@@ -123,6 +123,10 @@ def _resolve_sub_batch_sizes(args):
 
 
 def _validate_args(args):
+    if args.dataset_key == "agreidv2":
+        raise ValueError(
+            "AG-ReID.v2 currently supports baseline only; its D-AGVA masks "
+            "and three-domain view scores are not prepared")
     if args.channel_adap_gray != "off":
         raise ValueError("Channel augmentation is fixed off in this release")
     if not 0.0 < args.view_near_ratio < 1.0:
@@ -342,16 +346,21 @@ def _evaluate(model_ema, args, data_dir, epoch, best_r1, best_map,
         T.ToPILImage(), T.Resize((args.img_h, args.img_w)),
         T.ToTensor(), normalize])
     query_img, query_label = baseline.process_test_regdb(
-        data_dir, trial=args.trial, modal="visible")
+        data_dir, trial=args.trial, modal="visible",
+        dataset_key=args.dataset_key)
     gallery_img, gallery_label = baseline.process_test_regdb(
-        data_dir, trial=args.trial, modal="thermal")
-    gallery_set = baseline.TestData(
+        data_dir, trial=args.trial, modal="thermal",
+        dataset_key=args.dataset_key)
+    test_data_class = (
+        baseline.LazyTestData
+        if args.dataset_key == "agreidv2" else baseline.TestData)
+    gallery_set = test_data_class(
         gallery_img, gallery_label, transform=transform_test,
         img_size=(args.img_w, args.img_h))
     gallery_loader = data.DataLoader(
         gallery_set, batch_size=args.test_batch, shuffle=False,
         num_workers=args.workers)
-    query_set = baseline.TestData(
+    query_set = test_data_class(
         query_img, query_label, transform=transform_test,
         img_size=(args.img_w, args.img_h))
     query_loader = data.DataLoader(
@@ -397,10 +406,12 @@ def main_worker_stage2(args):
     print("Stage 2 ChannelRandomErasing enabled: True")
 
     print("==> Load unlabeled dataset")
+    ir_name, rgb_name = baseline.get_training_dataset_names(
+        args.dataset_key)
     dataset_ir = baseline.get_data(
-        "agreid_ir", args.data_dir, trial=args.trial)
+        ir_name, args.data_dir, trial=args.trial)
     dataset_ground = baseline.get_data(
-        "agreid_rgb", args.data_dir, trial=args.trial)
+        rgb_name, args.data_dir, trial=args.trial)
     if args.stage2_aerial_root:
         original_count = len(dataset_ir.train)
         dataset_ir.train = remap_samples_to_enhanced_root(
@@ -672,6 +683,10 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="Internal AG-ReID three-domain Stage 2 (no EMA loss)")
     parser.add_argument("-d", "--dataset", type=str, default="agreid_ir")
+    parser.add_argument(
+        "--dataset-key", choices=("agreid", "agreidv2"),
+        default="agreid",
+        help="AG-ReID dataset generation; default preserves v1 behavior")
     parser.add_argument("-b", "--batch-size", type=int, default=64)
     parser.add_argument("--test-batch", type=int, default=64)
     parser.add_argument("-j", "--workers", type=int, default=8)

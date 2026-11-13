@@ -1,9 +1,34 @@
 {
   "release_name": "PCLHD_AGReID_DT_release_20261110",
-  "dataset": "AG-ReID.v1",
+  "dataset": "AG-ReID.v1 plus AG-ReID.v2 baseline",
   "identity_rule": "concatenate P, T, and A filename fields",
   "expected_train_identities": 199,
   "expected_test_identities": 189,
+  "datasets": {
+    "agreid": {
+      "name": "AG-ReID.v1",
+      "identity_rule": "concatenate P, T, and A filename fields",
+      "train_identities": 199,
+      "test_identities": 189,
+      "experiments": ["baseline", "dynamic", "three_domain", "full"]
+    },
+    "agreidv2": {
+      "name": "AG-ReID.v2",
+      "identity_rule": "concatenate P, T, and A filename fields",
+      "experiments": ["baseline"],
+      "train_images": 51530,
+      "train_identities": 807,
+      "camera_images": {"C0": 21217, "C2": 21298, "C3": 9015},
+      "protocols": {
+        "exp1_aerial_to_cctv.txt": {"query": 2356, "gallery": 6347, "identities": 534},
+        "exp2_aerial_to_wearable.txt": {"query": 2209, "gallery": 12912, "identities": 519},
+        "exp4_cctv_to_aerial.txt": {"query": 1811, "gallery": 14362, "identities": 534},
+        "exp5_wearable_to_aerial.txt": {"query": 2340, "gallery": 12568, "identities": 519}
+      },
+      "training_camera_rule": "encoded_camid = int(A + C)",
+      "model_modalities": {"C0": 2, "C2": 1, "C3": 1}
+    }
+  },
   "purpose": "2x2 ablation of Stage-1 D-AGVA and Stage-2 three-domain matching",
   "experiments": {
     "baseline": {"dynamic_agva": false, "three_domain": false},

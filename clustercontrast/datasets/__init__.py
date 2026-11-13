@@ -13,6 +13,8 @@ from .regdb_ir import regdb_ir
 from .regdb_rgb import regdb_rgb
 from .agreid_ir import agreid_ir
 from .agreid_rgb import agreid_rgb
+from .agreidv2_ir import agreidv2_ir
+from .agreidv2_rgb import agreidv2_rgb
 from .lag_ir import lag_ir
 from .lag_rgb import lag_rgb
 __factory = {
@@ -28,6 +30,8 @@ __factory = {
     'regdb_rgb':regdb_rgb,
     'agreid_ir':agreid_ir,
     'agreid_rgb':agreid_rgb,
+    'agreidv2_ir':agreidv2_ir,
+    'agreidv2_rgb':agreidv2_rgb,
     'lag_ir':lag_ir,
     'lag_rgb':lag_rgb
 }

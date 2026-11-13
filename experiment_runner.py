@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Controlled AG-ReID.v1 D-AGVA/three-domain ablation launcher.
+"""Controlled AG-ReID experiment launcher.
 
-The release intentionally exposes only a 2x2 experiment matrix. Channel
-conversion augmentation is fixed off in both stages for every experiment.
+AG-ReID.v1 exposes the original 2x2 matrix. AG-ReID.v2 currently exposes only
+the channel-off baseline.
 """
 from __future__ import absolute_import, print_function
 
@@ -45,6 +45,10 @@ def build_parser():
     )
     parser.add_argument(
         "--experiment", choices=tuple(EXPERIMENTS), default="full")
+    parser.add_argument(
+        "--dataset-key", choices=("agreid", "agreidv2"),
+        default="agreid",
+        help="Dataset generation; agreid preserves all AG-ReID.v1 defaults")
     parser.add_argument(
         "--run-mode", choices=("full", "stage1", "stage2"), default="full")
     parser.add_argument(
@@ -130,11 +134,12 @@ def default_log_names(args, spec=None):
     spec = spec or get_experiment_spec(args.experiment)
     d_flag = int(spec["dynamic_agva"])
     t_flag = int(spec["three_domain"])
+    prefix = "agreidv2_dt" if args.dataset_key == "agreidv2" else "agreid_dt"
     stage1 = args.stage1_log_name or (
-        "agreid_dt_s1_d{}_channel_off_seed{}".format(d_flag, args.seed))
+        "{}_s1_d{}_channel_off_seed{}".format(prefix, d_flag, args.seed))
     stage2 = args.stage2_log_name or (
-        "agreid_dt_{}_d{}_t{}_channel_off_s2_seed{}".format(
-            args.experiment, d_flag, t_flag, args.seed))
+        "{}_{}_d{}_t{}_channel_off_s2_seed{}".format(
+            prefix, args.experiment, d_flag, t_flag, args.seed))
     return stage1, stage2
 
 
@@ -143,8 +148,10 @@ def _path(value):
 
 
 def _base_common_args(args, stage1_log_name, stage2_log_name):
+    dataset_name = (
+        "agreidv2_ir" if args.dataset_key == "agreidv2" else "agreid_ir")
     result = [
-        "--dataset", "agreid_ir",
+        "--dataset", dataset_name,
         "--trial", str(args.trial),
         "--epochs", str(args.epochs),
         "--iters", str(args.iters),
@@ -174,6 +181,8 @@ def _base_common_args(args, stage1_log_name, stage2_log_name):
         result.append("--debug-nonfinite")
     if args.allow_log_overwrite:
         result.append("--allow-log-overwrite")
+    if args.dataset_key != "agreid":
+        result += ["--dataset-key", args.dataset_key]
     return result
 
 
@@ -279,6 +288,10 @@ def checkpoint_path(args, stage1_log_name):
 
 def validate_args(args):
     spec = get_experiment_spec(args.experiment)
+    if args.dataset_key == "agreidv2" and args.experiment != "baseline":
+        raise ValueError(
+            "AG-ReID.v2 currently supports baseline only; D-AGVA masks and "
+            "three-domain view scores for v2 are not prepared")
     if args.run_mode == "stage2" and not args.stage1_checkpoint:
         raise ValueError("--run-mode stage2 requires --stage1-checkpoint")
     if args.run_mode != "stage2" and args.stage1_checkpoint:
@@ -326,7 +339,10 @@ def _run(command, dry_run):
 
 
 def _print_config(args, spec, stage1_log_name, stage2_log_name):
-    print("========== AG-ReID.v1 Controlled Ablation ==========")
+    if args.dataset_key == "agreid":
+        print("========== AG-ReID.v1 Controlled Ablation ==========")
+    else:
+        print("========== AG-ReID.v2 Baseline ==========")
     print("Experiment: {}".format(args.experiment))
     print("Run mode: {}".format(args.run_mode))
     print("D-AGVA (Stage 1 only): {}".format(spec["dynamic_agva"]))
@@ -346,9 +362,9 @@ def _print_config(args, spec, stage1_log_name, stage2_log_name):
 
 
 def run_experiment(dataset_key="agreid", argv=None):
-    if dataset_key != "agreid":
-        raise ValueError("This release supports AG-ReID.v1 only")
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    parser.set_defaults(dataset_key=dataset_key)
+    args = parser.parse_args(argv)
     validate_args(args)
     spec = get_experiment_spec(args.experiment)
     stage1_log_name, stage2_log_name = default_log_names(args, spec)

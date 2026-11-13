@@ -10,7 +10,10 @@ import sys
 
 
 ROOT = osp.dirname(osp.dirname(osp.abspath(__file__)))
-TEST_ENTRY = osp.join(ROOT, "examples", "PCLHD_AGReID_g2ag.py")
+TEST_ENTRIES = {
+    "agreid": osp.join(ROOT, "examples", "PCLHD_AGReID_g2ag.py"),
+    "agreidv2": osp.join(ROOT, "examples", "PCLHD_AGReIDv2_test.py"),
+}
 EXPERIMENTS = {
     "baseline": (0, 0),
     "dynamic": (1, 0),
@@ -22,6 +25,8 @@ EXPERIMENTS = {
 def parser():
     p = argparse.ArgumentParser(description="Batch-test AG-ReID checkpoints")
     p.add_argument("--gpu", default="0")
+    p.add_argument(
+        "--dataset-key", choices=tuple(TEST_ENTRIES), default="agreid")
     p.add_argument("--test-data-dir", required=True)
     p.add_argument("--logs-dir", required=True)
     p.add_argument("--output-dir", default="")
@@ -37,14 +42,20 @@ def parser():
     return p
 
 
-def log_name(experiment, seed):
+def log_name(experiment, seed, dataset_key="agreid"):
     d_flag, t_flag = EXPERIMENTS[experiment]
-    return "agreid_dt_{}_d{}_t{}_channel_off_s2_seed{}".format(
-        experiment, d_flag, t_flag, seed)
+    prefix = "agreidv2_dt" if dataset_key == "agreidv2" else "agreid_dt"
+    return "{}_{}_d{}_t{}_channel_off_s2_seed{}".format(
+        prefix, experiment, d_flag, t_flag, seed)
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if (args.dataset_key == "agreidv2"
+            and any(name != "baseline" for name in args.experiments)):
+        raise ValueError(
+            "AG-ReID.v2 currently supports baseline only; D-AGVA masks and "
+            "three-domain view scores for v2 are not prepared")
     logs_dir = osp.abspath(osp.expanduser(args.logs_dir))
     output_dir = args.output_dir or osp.join(logs_dir, "evaluation_logs")
     output_dir = osp.abspath(osp.expanduser(output_dir))
@@ -57,20 +68,27 @@ def main(argv=None):
     for experiment in args.experiments:
         d_flag, t_flag = EXPERIMENTS[experiment]
         checkpoint = osp.join(
-            logs_dir, log_name(experiment, args.seed), str(args.trial),
+            logs_dir, log_name(
+                experiment, args.seed, args.dataset_key), str(args.trial),
             args.checkpoint_name)
         note = (
             "experiment={} | D-AGVA(Stage1)={} | three-domain(Stage2)={} | "
             "channel augmentation Stage1/Stage2=OFF | checkpoint={}"
         ).format(experiment, bool(d_flag), bool(t_flag), checkpoint)
         command = [
-            sys.executable, TEST_ENTRY,
+            sys.executable, TEST_ENTRIES[args.dataset_key],
             "--data-dir", osp.abspath(osp.expanduser(args.test_data_dir)),
             "--resume", checkpoint,
             "--gpu", str(args.gpu),
             "--batch-size", str(args.batch_size),
             "--workers", str(args.workers),
         ]
+        if args.dataset_key == "agreidv2":
+            command += [
+                "--seed", str(args.seed),
+                "--output-csv", osp.join(
+                    output_dir, "agreidv2_results.csv"),
+            ]
         print("\n" + "=" * 88)
         print("TEST NOTE: " + note)
         print("$ " + " ".join(command))

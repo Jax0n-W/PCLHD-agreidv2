@@ -123,11 +123,17 @@ def compute_jaccard_distance(target_features, k1=20, k2=6, print_flag=True, sear
     return jaccard_dist
 
 
-def compute_modal_invariant_jaccard_distance(target_features, file, k1=20, k2=6, print_flag=True, search_option=0, use_float16=False):
+def compute_modal_invariant_jaccard_distance(
+        target_features, file, k1=20, k2=6, print_flag=True,
+        search_option=0, use_float16=False, modalities=None):
     end = time.time()
     all_file_name = []
     for i, (fname, _, cid) in enumerate(file):
         all_file_name.append(fname)
+    if modalities is not None and len(modalities) != len(all_file_name):
+        raise ValueError(
+            "modalities length {} does not match file length {}".format(
+                len(modalities), len(all_file_name)))
 
     if print_flag:
         print('Computing jaccard distance...')
@@ -197,7 +203,11 @@ def compute_modal_invariant_jaccard_distance(target_features, file, k1=20, k2=6,
 
             for ii in initial_rank[i,:k2]:
                 fname = all_file_name[ii]
-                if 'ir_modify' in fname or 'aerial_modify' in fname:
+                if modalities is not None and modalities[ii] == 2:
+                    feas_NIR_temp.append(V[ii,:])
+                elif modalities is not None and modalities[ii] == 1:
+                    feas_VIS_temp.append(V[ii,:])
+                elif 'ir_modify' in fname or 'aerial_modify' in fname:
                     feas_NIR_temp.append(V[ii,:])
                 elif 'rgb_modify' in fname or 'ground_modify' in fname:
                     feas_VIS_temp.append(V[ii,:])

@@ -1,4 +1,4 @@
-# PCLHD AG-ReID.v1: D-AGVA × Three-Domain Ablation Release
+# PCLHD AG-ReID.v1 / AG-ReID.v2 Baseline Release
 
 本发布版用于在 **两个训练阶段均关闭通道转换增强** 的条件下，对
 D-AGVA 与三域匹配进行受控的 2×2 消融实验。代码只面向 AG-ReID.v1。
@@ -194,3 +194,93 @@ checkpoint、日志和 Python cache。
 - `scripts/run_all_ablations.py`：四组消融批量训练；
 - `scripts/test_all_checkpoints.py`：四组权重批量测试；
 - `tests/test_release_configuration.py`：配置回归测试。
+
+## AG-ReID.v2 baseline
+
+AG-ReID.v2 目前只开放 `baseline`（D=0、T=0）的 Stage 1、Stage 2 和四个
+官方测试协议。v1 的 2×2 消融入口、默认值和日志名保持不变。v2 的
+`dynamic`、`three_domain`、`full` 会明确报错，因为尚未准备 v2 的 D-AGVA
+掩码与三域视角分数。
+
+### 目录要求
+
+`--data-dir` 必须指向外层目录：
+
+```text
+<data-dir>/
+├── exp1_aerial_to_cctv.txt
+├── exp2_aerial_to_wearable.txt
+├── exp4_cctv_to_aerial.txt
+├── exp5_wearable_to_aerial.txt
+└── AG-ReID.v2/
+    ├── train_all/<ID目录>/*.jpg
+    ├── query/<ID目录>/*.jpg
+    └── gallery/<ID目录>/*.jpg
+```
+
+数据不会被移动、改名或复制。训练图像按文件名解析 P/T/A 仅用于完整性
+断言；训练元组使用未标注占位符，优化过程只使用 DBSCAN 伪标签。C0 进入
+IR 分支（`modal=2`），C2/C3 进入 RGB 分支（`modal=1`）；采样器相机号为
+`int(A + C)`，与 v1 的高度档+相机定义一致。
+
+### 预检
+
+训练前先在 CPU 上核对 51,530 张训练图、807 个身份、各相机数量及四份
+协议清单：
+
+```bash
+python tools/preflight_agreidv2.py --data-dir <data-dir>
+```
+
+任何图像数或身份数不一致都会打印实际数字并退出。
+
+### 训练
+
+完整 baseline（Stage 2 默认加载 Stage 1 `model_best.pth.tar`）：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 \
+python train_agreid.py \
+  --dataset-key agreidv2 \
+  --experiment baseline \
+  --run-mode full \
+  --checkpoint-policy best \
+  --data-dir <data-dir> \
+  --logs-dir <logs-dir>
+```
+
+v2 默认日志目录名带 `agreidv2_dt_` 前缀，不会与 v1 冲突。批量入口也接受
+数据集键，但 v2 必须只选择 baseline：
+
+```bash
+python scripts/run_all_ablations.py \
+  --dataset-key agreidv2 \
+  --experiments baseline \
+  --data-dir <data-dir> \
+  --logs-dir <logs-dir>
+```
+
+### 四协议测试
+
+以下命令依次测试 A→C、A→W、C→A、W→A，并输出 Rank-1/5/10、mAP、
+mINP，同时生成每协议一行的 CSV：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 \
+python examples/PCLHD_AGReIDv2_test.py \
+  --data-dir <data-dir> \
+  --resume <stage2-checkpoint.pth.tar> \
+  --seed 1 \
+  --output-csv <results.csv>
+```
+
+批量测试脚本默认选择最终 `checkpoint.pth.tar`；需要最佳权重时显式传入
+`--checkpoint-name model_best.pth.tar`：
+
+```bash
+python scripts/test_all_checkpoints.py \
+  --dataset-key agreidv2 \
+  --experiments baseline \
+  --test-data-dir <data-dir> \
+  --logs-dir <logs-dir>
+```
