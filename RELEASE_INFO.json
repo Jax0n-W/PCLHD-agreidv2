@@ -46,6 +46,8 @@
     "stage2_ema_loss_backprop": false,
     "stage2_ema_encoder_update": true,
     "stage2_all_memory_optimization": true,
+    "dbscan_eps_default": 0.3,
+    "nondefault_eps_log_suffix": true,
     "default_stage2_initialization": "stage1_model_best",
     "default_checkpoint_policy": "best"
   },

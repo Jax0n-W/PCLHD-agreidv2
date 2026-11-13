@@ -20,11 +20,13 @@ REQUIRED = (
     "scripts/test_all_checkpoints.py",
     "clustercontrast/datasets/agreidv2_ir.py",
     "clustercontrast/datasets/agreidv2_rgb.py",
+    "clustercontrast/utils/clustering.py",
     "examples/PCLHD_AGReIDv2_test.py",
     "tools/preflight_agreidv2.py",
     "tests/test_release_configuration.py",
     "tests/test_agreid_identity.py",
     "tests/test_agreidv2_support.py",
+    "tests/test_clustering_eps.py",
     "view_scores/agreid_aerial_view_scores_foreground.csv",
 )
 FORBIDDEN_SUFFIXES = (
@@ -56,6 +58,8 @@ def main():
         if "ChannelRandomErasing(" not in source:
             ok = fail("spatial random erasing missing from {}".format(
                 filename)) and ok
+        if "DBSCAN(eps=0.3" in source or "eps = 0.3" in source:
+            ok = fail("hard-coded DBSCAN eps in {}".format(filename)) and ok
 
     identity_consumers = {
         "_train_agreid_engine.py": "parse_agreid_name",

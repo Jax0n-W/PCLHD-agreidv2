@@ -158,6 +158,11 @@ logs_agreid_dt/agreid_dt_full_d1_t1_channel_off_s2_seed1/1/checkpoint.pth.tar
 G$\rightarrow$A Rank-1 选择；虽然 P/T/A 身份已修正，这种选择方式仍可能产生
 test-set leakage，论文正式实验应明确披露或改用独立 validation split。
 
+DBSCAN 的 `--eps` 默认值为 `0.3`，Stage 1、Stage 2 以及三域引擎均使用该
+参数。非默认值会自动加入日志名，例如 `--eps 0.6` 生成 `_eps0.6` 后缀；
+默认 `0.3` 不加后缀，从而保持既有日志路径不变。若某域找不到簇，引擎仍会
+逐次增加 `0.05` 并打印每次调整以及每轮最终实际使用的 eps。
+
 ## 批量测试
 
 ```bash

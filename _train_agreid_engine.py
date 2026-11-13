@@ -9,7 +9,6 @@ import collections
 import time
 from datetime import timedelta
 
-from sklearn.cluster import DBSCAN
 from PIL import Image
 import torch
 from torch import nn
@@ -38,6 +37,9 @@ from clustercontrast.utils.data.dynamic_agva import (
     print_dynamic_agva_config, validate_dynamic_agva_args,
 )
 from clustercontrast.utils.logging import Logger
+from clustercontrast.utils.clustering import (
+    append_eps_log_suffix, build_agreid_stage1_clusterers,
+    build_agreid_stage2_clusterers)
 from clustercontrast.utils.serialization import load_checkpoint, save_checkpoint
 from clustercontrast.utils.faiss_rerank import compute_jaccard_distance,compute_modal_invariant_jaccard_distance
 from clustercontrast.utils.data.sampler import RandomMultipleGallerySampler, RandomMultipleGallerySamplerNoCam
@@ -566,6 +568,10 @@ def check_experiment_output_directory(output_dir, allow_overwrite=False):
 
 def main():
     args = parser.parse_args()
+    args.stage1_log_name = append_eps_log_suffix(
+        args.stage1_log_name, args.eps)
+    args.stage2_log_name = append_eps_log_suffix(
+        args.stage2_log_name, args.eps)
     if args.dataset_key == 'agreidv2' and args.use_dynamic_agva:
         raise ValueError(
             'AG-ReID.v2 currently supports baseline only; its D-AGVA masks '
@@ -657,12 +663,13 @@ def main_worker_stage1(args,log_s1_name):
         with torch.no_grad():
             if epoch == 0:
                 # DBSCAN cluster
-                ir_eps = 0.3
-                print('IR Clustering criterion: eps: {:.3f}'.format(ir_eps))
-                cluster_ir = DBSCAN(eps=ir_eps, min_samples=4, metric='precomputed', n_jobs=-1)
-                rgb_eps = 0.3
-                print('RGB Clustering criterion: eps: {:.3f}'.format(rgb_eps))
-                cluster_rgb = DBSCAN(eps=rgb_eps, min_samples=4, metric='precomputed', n_jobs=-1)
+                clusterers = build_agreid_stage1_clusterers(args)
+                cluster_ir = clusterers['ir']
+                cluster_rgb = clusterers['rgb']
+                print('IR Clustering criterion: eps: {:.3f}'.format(
+                    cluster_ir.eps))
+                print('RGB Clustering criterion: eps: {:.3f}'.format(
+                    cluster_rgb.eps))
 
             print('==> Create pseudo labels for unlabeled RGB data')
 
@@ -696,6 +703,7 @@ def main_worker_stage1(args,log_s1_name):
             max_attempts = 10
             attempt = 0
             while attempt < max_attempts:
+                ir_eps_used = cluster_ir.eps
                 pseudo_labels_ir = cluster_ir.fit_predict(rerank_dist_ir)
                 num_cluster_ir = len(set(pseudo_labels_ir)) - (1 if -1 in pseudo_labels_ir else 0)
                 if num_cluster_ir > 0:
@@ -711,9 +719,10 @@ def main_worker_stage1(args,log_s1_name):
 
             # Adaptive clustering for RGB
             rerank_dist_rgb = compute_jaccard_distance(features_rgb, k1=args.k1, k2=args.k2,search_option=3)
-            cluster_rgb.eps = getattr(cluster_rgb, 'eps', 0.3)
+            cluster_rgb.eps = getattr(cluster_rgb, 'eps', args.eps)
             attempt = 0
             while attempt < max_attempts:
+                rgb_eps_used = cluster_rgb.eps
                 pseudo_labels_rgb = cluster_rgb.fit_predict(rerank_dist_rgb)
                 num_cluster_rgb = len(set(pseudo_labels_rgb)) - (1 if -1 in pseudo_labels_rgb else 0)
                 if num_cluster_rgb > 0:
@@ -740,7 +749,6 @@ def main_worker_stage1(args,log_s1_name):
                 raise RuntimeError(
                     'RGB clustering collapsed: clusters={}, required={}'
                     .format(num_cluster_rgb, min_clusters))
-
         # generate new dataset and calculate cluster centers
         @torch.no_grad()
         def generate_cluster_features(labels, features):
@@ -946,6 +954,10 @@ def main_worker_stage1(args,log_s1_name):
                 format(epoch, cmc[0], mAP, best_R1, best_mAP, best_epoch))
 ############################
         lr_scheduler.step()
+        print(
+            'Stage 1 epoch {} clustering eps used: IR={:.3f}, '
+            'RGB={:.3f}'.format(
+                epoch, ir_eps_used, rgb_eps_used))
     end_time = time.monotonic()
     print('Total running time: ', timedelta(seconds=end_time - start_time))
 
@@ -1019,15 +1031,16 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
         with torch.no_grad():
             if epoch == 0:
                 # DBSCAN cluster
-                ir_eps = 0.3
-                print('IR Clustering criterion: eps: {:.3f}'.format(ir_eps))
-                cluster_ir = DBSCAN(eps=ir_eps, min_samples=4, metric='precomputed', n_jobs=-1)
-                rgb_eps = 0.3
-                print('RGB Clustering criterion: eps: {:.3f}'.format(rgb_eps))
-                cluster_rgb = DBSCAN(eps=rgb_eps, min_samples=4, metric='precomputed', n_jobs=-1)
-                all_eps = 0.3
-                print('All Clustering criterion: eps: {:.3f}'.format(all_eps))
-                cluster_all = DBSCAN(eps=all_eps, min_samples=4, metric='precomputed', n_jobs=-1)
+                clusterers = build_agreid_stage2_clusterers(args)
+                cluster_ir = clusterers['ir']
+                cluster_rgb = clusterers['rgb']
+                cluster_all = clusterers['all']
+                print('IR Clustering criterion: eps: {:.3f}'.format(
+                    cluster_ir.eps))
+                print('RGB Clustering criterion: eps: {:.3f}'.format(
+                    cluster_rgb.eps))
+                print('All Clustering criterion: eps: {:.3f}'.format(
+                    cluster_all.eps))
 
             print('==> Create pseudo labels for unlabeled RGB data')
 
@@ -1059,6 +1072,7 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
             max_attempts = 10
             attempt = 0
             while attempt < max_attempts:
+                ir_eps_used = cluster_ir.eps
                 pseudo_labels_ir = cluster_ir.fit_predict(rerank_dist_ir)
                 num_cluster_ir = len(set(pseudo_labels_ir)) - (1 if -1 in pseudo_labels_ir else 0)
                 if num_cluster_ir > 0:
@@ -1076,6 +1090,7 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
             rerank_dist_rgb = compute_jaccard_distance(features_rgb, k1=args.k1, k2=args.k2,search_option=3)
             attempt = 0
             while attempt < max_attempts:
+                rgb_eps_used = cluster_rgb.eps
                 pseudo_labels_rgb = cluster_rgb.fit_predict(rerank_dist_rgb)
                 num_cluster_rgb = len(set(pseudo_labels_rgb)) - (1 if -1 in pseudo_labels_rgb else 0)
                 if num_cluster_rgb > 0:
@@ -1101,6 +1116,7 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
                                                                        modalities=all_modalities)
             attempt = 0
             while attempt < max_attempts:
+                all_eps_used = cluster_all.eps
                 pseudo_labels_all = cluster_all.fit_predict(rerank_dist_all)
                 num_cluster_all = len(set(pseudo_labels_all)) - (1 if -1 in pseudo_labels_all else 0)
                 if num_cluster_all > 0:
@@ -1113,7 +1129,6 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
                 pseudo_labels_all = np.zeros(len(features_all), dtype=np.int32)
                 num_cluster_all = 1
             del rerank_dist_all
-
         # generate new dataset and calculate cluster centers
         @torch.no_grad()
         def generate_cluster_features(labels, features):
@@ -1488,6 +1503,10 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
                 format(epoch, cmc[0], mAP, best_R1, best_mAP, best_epoch))
 ############################
         lr_scheduler.step()
+        print(
+            'Stage 2 epoch {} clustering eps used: IR={:.3f}, '
+            'RGB={:.3f}, ALL={:.3f}'.format(
+                epoch, ir_eps_used, rgb_eps_used, all_eps_used))
     end_time = time.monotonic()
     print('Total running time: ', timedelta(seconds=end_time - start_time))
 
@@ -1512,7 +1531,7 @@ if __name__ == '__main__':
                              "each identity has num_instances instances, "
                              "default: 0 (NOT USE)")
     # cluster
-    parser.add_argument('--eps', type=float, default=0.6,
+    parser.add_argument('--eps', type=float, default=0.3,
                         help="max neighbor distance for DBSCAN")
     parser.add_argument('--eps-gap', type=float, default=0.02,
                         help="multi-scale criterion for measuring cluster reliability")

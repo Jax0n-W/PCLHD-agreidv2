@@ -14,6 +14,7 @@ import sys
 
 
 PROJECT_ROOT = osp.dirname(osp.abspath(__file__))
+DEFAULT_EPS = 0.3
 
 EXPERIMENTS = {
     "baseline": {"dynamic_agva": False, "three_domain": False},
@@ -77,7 +78,7 @@ def build_parser():
     parser.add_argument("--num-instances", type=int, default=16)
     parser.add_argument("--k1", type=int, default=30)
     parser.add_argument("--k2", type=int, default=6)
-    parser.add_argument("--eps", type=float, default=0.3)
+    parser.add_argument("--eps", type=float, default=DEFAULT_EPS)
     parser.add_argument("--lr", type=float, default=0.00035)
     parser.add_argument("--weight-decay", type=float, default=0.0005)
     parser.add_argument("--step-size", type=int, default=20)
@@ -130,6 +131,21 @@ def get_experiment_spec(name):
         raise ValueError("Unknown experiment: {}".format(name))
 
 
+def eps_log_suffix(eps):
+    """Keep legacy names at 0.3 and isolate every non-default eps run."""
+    value = float(eps)
+    if abs(value - DEFAULT_EPS) < 1e-12:
+        return ""
+    return "_eps{:g}".format(value)
+
+
+def _append_eps_suffix(name, eps):
+    suffix = eps_log_suffix(eps)
+    if not suffix or str(name).endswith(suffix):
+        return name
+    return "{}{}".format(name, suffix)
+
+
 def default_log_names(args, spec=None):
     spec = spec or get_experiment_spec(args.experiment)
     d_flag = int(spec["dynamic_agva"])
@@ -140,6 +156,8 @@ def default_log_names(args, spec=None):
     stage2 = args.stage2_log_name or (
         "{}_{}_d{}_t{}_channel_off_s2_seed{}".format(
             prefix, args.experiment, d_flag, t_flag, args.seed))
+    stage1 = _append_eps_suffix(stage1, args.eps)
+    stage2 = _append_eps_suffix(stage2, args.eps)
     return stage1, stage2
 
 

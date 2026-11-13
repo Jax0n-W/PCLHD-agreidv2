@@ -15,6 +15,11 @@ import sys
 
 ROOT = osp.dirname(osp.dirname(osp.abspath(__file__)))
 ENTRY = osp.join(ROOT, "train_agreid.py")
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from experiment_runner import DEFAULT_EPS, eps_log_suffix
+
 ALL_EXPERIMENTS = ("baseline", "dynamic", "three_domain", "full")
 DYNAMIC_EXPERIMENTS = {"dynamic", "full"}
 
@@ -49,6 +54,7 @@ def build_parser():
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--iters", type=int, default=400)
+    parser.add_argument("--eps", type=float, default=DEFAULT_EPS)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--print-freq", type=int, default=50)
     parser.add_argument("--dynamic-agva-strict-masks", action="store_true")
@@ -82,6 +88,8 @@ def common_args(args):
         result.append("--dry-run")
     if args.dataset_key != "agreid":
         result += ["--dataset-key", args.dataset_key]
+    if eps_log_suffix(args.eps):
+        result += ["--eps", str(args.eps)]
     return result
 
 
@@ -94,7 +102,7 @@ def run(command, env, dry_run):
 def stage1_checkpoint(args, dynamic):
     prefix = "agreidv2_dt" if args.dataset_key == "agreidv2" else "agreid_dt"
     log_name = "{}_s1_d{}_channel_off_seed{}".format(
-        prefix, int(dynamic), args.seed)
+        prefix, int(dynamic), args.seed) + eps_log_suffix(args.eps)
     return osp.join(
         osp.abspath(osp.expanduser(args.logs_dir)), log_name,
         str(args.trial), "model_best.pth.tar")

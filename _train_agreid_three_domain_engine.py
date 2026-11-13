@@ -21,7 +21,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.utils.data as data
-from sklearn.cluster import DBSCAN
 from torch.backends import cudnn
 
 from ChannelAug import ChannelRandomErasing
@@ -40,6 +39,8 @@ from clustercontrast.three_domain import (
 from clustercontrast.trainers_three_domain import \
     ClusterContrastTrainer_PCLMP_ThreeDomain
 from clustercontrast.utils.data import transforms as T
+from clustercontrast.utils.clustering import \
+    append_eps_log_suffix, build_agreid_three_domain_clusterers
 from clustercontrast.utils.logging import Logger
 from clustercontrast.utils.serialization import save_checkpoint
 from clustercontrast.viewbridge import (VIEW_PATH_MODES, load_view_score_map,
@@ -221,6 +222,7 @@ def _prepare_view_groups(args, dataset_ir):
 def _adaptive_cluster(clusterer, distances, name, max_attempts=10):
     attempts = 0
     while attempts < max_attempts:
+        clusterer.last_used_eps = clusterer.eps
         labels = clusterer.fit_predict(distances)
         num_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         if num_clusters > 0:
@@ -461,16 +463,13 @@ def main_worker_stage2(args):
         model, model_ema, far_weight=far_weight,
         chain_cross_weight=args.chain_cross_weight)
 
-    cluster_far = DBSCAN(eps=0.3, min_samples=4,
-                         metric="precomputed", n_jobs=args.cluster_n_jobs)
-    cluster_near = DBSCAN(eps=0.3, min_samples=4,
-                          metric="precomputed", n_jobs=args.cluster_n_jobs)
-    cluster_ground = DBSCAN(
-        eps=0.3, min_samples=4, metric="precomputed",
-        n_jobs=args.cluster_n_jobs)
-    cluster_all = DBSCAN(eps=0.3, min_samples=4,
-                         metric="precomputed", n_jobs=args.cluster_n_jobs)
-    print("Far/Near/Ground/ALL clustering initial eps: 0.300")
+    clusterers = build_agreid_three_domain_clusterers(args)
+    cluster_far = clusterers["far"]
+    cluster_near = clusterers["near"]
+    cluster_ground = clusterers["ground"]
+    cluster_all = clusterers["all"]
+    print("Far/Near/Ground/ALL clustering initial eps: {:.3f}".format(
+        args.eps))
 
     best_r1 = 0.0
     best_map = 0.0
@@ -528,7 +527,6 @@ def main_worker_stage2(args):
             labels_all, num_all = _adaptive_cluster(
                 cluster_all, distance_all, "ALL")
             del distance_all
-
         memory_far, centers_far, num_far = _create_hard_memory(
             model, args, labels_far, features_far, features_far_ema)
         memory_near, centers_near, num_near = _create_hard_memory(
@@ -674,6 +672,14 @@ def main_worker_stage2(args):
             model_ema, args, data_dir, epoch,
             best_r1, best_map, best_epoch)
         lr_scheduler.step()
+        print(
+            "Stage 2 three-domain epoch {} clustering eps used: "
+            "Far={:.3f}, Near={:.3f}, Ground={:.3f}, ALL={:.3f}"
+            .format(
+                epoch, cluster_far.last_used_eps,
+                cluster_near.last_used_eps,
+                cluster_ground.last_used_eps,
+                cluster_all.last_used_eps))
 
     print("Total running time: {}".format(
         timedelta(seconds=time.monotonic() - start_time)))
@@ -693,7 +699,7 @@ def build_parser():
     parser.add_argument("--height", type=int, default=288)
     parser.add_argument("--width", type=int, default=144)
     parser.add_argument("--num-instances", type=int, default=16)
-    parser.add_argument("--eps", type=float, default=0.6)
+    parser.add_argument("--eps", type=float, default=0.3)
     parser.add_argument("--eps-gap", type=float, default=0.02)
     parser.add_argument("--k1", type=int, default=30)
     parser.add_argument("--k2", type=int, default=6)
@@ -770,6 +776,8 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(
         sys.argv[1:] if argv is None else argv)
+    args.stage2_log_name = append_eps_log_suffix(
+        args.stage2_log_name, args.eps)
     _validate_args(args)
     args.logs_root = osp.abspath(osp.expanduser(args.logs_dir))
     output_dir = get_stage2_output_directory(
