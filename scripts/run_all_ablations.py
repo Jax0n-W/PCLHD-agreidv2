@@ -55,6 +55,15 @@ def build_parser():
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--iters", type=int, default=400)
     parser.add_argument("--eps", type=float, default=DEFAULT_EPS)
+    parser.add_argument(
+        "--eps-all", type=float, default=None,
+        help="Stage-2 ALL DBSCAN eps; defaults to --eps")
+    parser.add_argument(
+        "--dbscan-backend", choices=("sklearn", "fast"),
+        default="sklearn")
+    parser.add_argument(
+        "--dump-cluster-dist-epoch", type=int, default=-1,
+        help="zero-based Stage-2 epoch whose ALL distance matrix is saved")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--print-freq", type=int, default=50)
     parser.add_argument("--dynamic-agva-strict-masks", action="store_true")
@@ -90,6 +99,8 @@ def common_args(args):
         result += ["--dataset-key", args.dataset_key]
     if eps_log_suffix(args.eps):
         result += ["--eps", str(args.eps)]
+    if args.dbscan_backend != "sklearn":
+        result += ["--dbscan-backend", args.dbscan_backend]
     return result
 
 
@@ -148,6 +159,12 @@ def main(argv=None):
             "--run-mode", "stage2",
             "--stage1-checkpoint", checkpoint,
         ] + shared
+        if args.eps_all is not None:
+            command += ["--eps-all", str(args.eps_all)]
+        if args.dump_cluster_dist_epoch >= 0:
+            command += [
+                "--dump-cluster-dist-epoch",
+                str(args.dump_cluster_dist_epoch)]
         run(command, env, args.dry_run)
     return 0
 

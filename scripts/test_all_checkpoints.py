@@ -13,7 +13,7 @@ ROOT = osp.dirname(osp.dirname(osp.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from experiment_runner import DEFAULT_EPS, eps_log_suffix
+from experiment_runner import DEFAULT_EPS, eps_all_log_suffix, eps_log_suffix
 
 TEST_ENTRIES = {
     "agreid": osp.join(ROOT, "examples", "PCLHD_AGReID_g2ag.py"),
@@ -38,6 +38,9 @@ def parser():
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--trial", type=int, default=1)
     p.add_argument("--eps", type=float, default=DEFAULT_EPS)
+    p.add_argument(
+        "--eps-all", type=float, default=None,
+        help="Stage-2 ALL DBSCAN eps; defaults to --eps")
     p.add_argument("--checkpoint-name", default="checkpoint.pth.tar")
     p.add_argument(
         "--experiments", nargs="+", choices=tuple(EXPERIMENTS),
@@ -48,11 +51,13 @@ def parser():
     return p
 
 
-def log_name(experiment, seed, dataset_key="agreid", eps=DEFAULT_EPS):
+def log_name(experiment, seed, dataset_key="agreid", eps=DEFAULT_EPS,
+             eps_all=None):
     d_flag, t_flag = EXPERIMENTS[experiment]
     prefix = "agreidv2_dt" if dataset_key == "agreidv2" else "agreid_dt"
-    return "{}_{}_d{}_t{}_channel_off_s2_seed{}{}".format(
-        prefix, experiment, d_flag, t_flag, seed, eps_log_suffix(eps))
+    return "{}_{}_d{}_t{}_channel_off_s2_seed{}{}{}".format(
+        prefix, experiment, d_flag, t_flag, seed, eps_log_suffix(eps),
+        eps_all_log_suffix(eps, eps_all))
 
 
 def main(argv=None):
@@ -63,8 +68,9 @@ def main(argv=None):
             "AG-ReID.v2 currently supports baseline only; D-AGVA masks and "
             "three-domain view scores for v2 are not prepared")
     logs_dir = osp.abspath(osp.expanduser(args.logs_dir))
-    default_output_name = "evaluation_logs{}".format(
-        eps_log_suffix(args.eps))
+    default_output_name = "evaluation_logs{}{}".format(
+        eps_log_suffix(args.eps),
+        eps_all_log_suffix(args.eps, args.eps_all))
     output_dir = args.output_dir or osp.join(logs_dir, default_output_name)
     output_dir = osp.abspath(osp.expanduser(output_dir))
     if not args.dry_run:
@@ -77,7 +83,8 @@ def main(argv=None):
         d_flag, t_flag = EXPERIMENTS[experiment]
         checkpoint = osp.join(
             logs_dir, log_name(
-                experiment, args.seed, args.dataset_key, args.eps),
+                experiment, args.seed, args.dataset_key, args.eps,
+                args.eps_all),
             str(args.trial),
             args.checkpoint_name)
         note = (
@@ -86,6 +93,8 @@ def main(argv=None):
         ).format(experiment, bool(d_flag), bool(t_flag), checkpoint)
         if eps_log_suffix(args.eps):
             note += " | eps={}".format(args.eps)
+        if eps_all_log_suffix(args.eps, args.eps_all):
+            note += " | eps_all={}".format(args.eps_all)
         command = [
             sys.executable, TEST_ENTRIES[args.dataset_key],
             "--data-dir", osp.abspath(osp.expanduser(args.test_data_dir)),

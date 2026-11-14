@@ -163,6 +163,46 @@ DBSCAN 的 `--eps` 默认值为 `0.3`，Stage 1、Stage 2 以及三域引擎均�
 默认 `0.3` 不加后缀，从而保持既有日志路径不变。若某域找不到簇，引擎仍会
 逐次增加 `0.05` 并打印每次调整以及每轮最终实际使用的 eps。
 
+Stage 2 的联合（ALL）聚类可用 `--eps-all` 单独设置；未提供时继承
+`--eps`，因此默认命令、日志名和数值行为均不变。仅当两者不同时，Stage 2
+日志名才在现有 eps 后缀后追加 `_epsall{值}`，例如
+`--eps 0.6 --eps-all 0.3` 对应 `_eps0.6_epsall0.3`。Stage 1 不接收
+`--eps-all`，其日志名和权重查找路径不受影响。
+
+### 快速 DBSCAN（显式启用）
+
+默认 `--dbscan-backend sklearn` 保持原有子命令和结果不变。大规模稠密
+预计算距离矩阵可显式改用分块实现：
+
+```bash
+python train_agreid.py \
+  --dataset-key agreidv2 \
+  --experiment baseline --run-mode full \
+  --eps 0.6 \
+  --dbscan-backend fast \
+  --data-dir <data-dir> --logs-dir <logs-dir>
+```
+
+快速实现不改变 `eps`、`min_samples` 或任何训练超参，并复现 sklearn 的
+簇编号与边界点归属。实现及 sklearn 1.8.0 源码语义核对见
+`FAST_DBSCAN_NOTES.md`。
+
+如需用真实 Stage 2 联合距离矩阵逐元素验证，可在训练时保存一个零基 epoch：
+
+```bash
+python train_agreid.py \
+  --dataset-key agreidv2 \
+  --experiment baseline --run-mode stage2 \
+  --stage1-checkpoint <stage1-model-best> \
+  --eps 0.6 --dbscan-backend fast \
+  --dump-cluster-dist-epoch 1 \
+  --data-dir <data-dir> --logs-dir <logs-dir>
+
+python tools/verify_fast_dbscan.py \
+  <stage2-output>/cluster_dist_all_epoch_1.npy \
+  --eps 0.6 --min-samples 4
+```
+
 ## 批量测试
 
 ```bash

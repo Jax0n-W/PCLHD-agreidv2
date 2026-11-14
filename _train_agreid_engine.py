@@ -38,8 +38,11 @@ from clustercontrast.utils.data.dynamic_agva import (
 )
 from clustercontrast.utils.logging import Logger
 from clustercontrast.utils.clustering import (
-    append_eps_log_suffix, build_agreid_stage1_clusterers,
-    build_agreid_stage2_clusterers)
+    append_eps_log_suffix, append_stage2_eps_log_suffix,
+    build_agreid_stage1_clusterers, build_agreid_stage2_clusterers,
+    resolve_eps_all)
+from clustercontrast.utils.fast_dbscan import \
+    dump_cluster_distance_if_requested
 from clustercontrast.utils.serialization import load_checkpoint, save_checkpoint
 from clustercontrast.utils.faiss_rerank import compute_jaccard_distance,compute_modal_invariant_jaccard_distance
 from clustercontrast.utils.data.sampler import RandomMultipleGallerySampler, RandomMultipleGallerySamplerNoCam
@@ -568,16 +571,22 @@ def check_experiment_output_directory(output_dir, allow_overwrite=False):
 
 def main():
     args = parser.parse_args()
+    if (args.dump_cluster_dist_epoch < -1
+            or args.dump_cluster_dist_epoch >= args.epochs):
+        parser.error(
+            '--dump-cluster-dist-epoch must be -1 or smaller than --epochs')
+    args.eps_all = resolve_eps_all(args)
     args.stage1_log_name = append_eps_log_suffix(
         args.stage1_log_name, args.eps)
-    args.stage2_log_name = append_eps_log_suffix(
-        args.stage2_log_name, args.eps)
+    args.stage2_log_name = append_stage2_eps_log_suffix(
+        args.stage2_log_name, args.eps, args.eps_all)
     if args.dataset_key == 'agreidv2' and args.use_dynamic_agva:
         raise ValueError(
             'AG-ReID.v2 currently supports baseline only; its D-AGVA masks '
             'and three-domain view scores are not prepared')
     validate_dynamic_agva_args(args)
     print_dynamic_agva_config(args)
+    print('DBSCAN backend: {}'.format(args.dbscan_backend))
     args.logs_root = osp.abspath(osp.expanduser(args.logs_dir))
 
     if args.seed is not None:
@@ -1114,6 +1123,9 @@ def main_worker_stage2(args,log_s1_name,log_s2_name,stage1_checkpoint=None):
                                                                        file=sorted(dataset_rgb.train) + sorted(
                                                                            dataset_ir.train), search_option=3,
                                                                        modalities=all_modalities)
+            dump_cluster_distance_if_requested(
+                rerank_dist_all, epoch, args.dump_cluster_dist_epoch,
+                args.logs_dir)
             attempt = 0
             while attempt < max_attempts:
                 all_eps_used = cluster_all.eps
@@ -1533,6 +1545,15 @@ if __name__ == '__main__':
     # cluster
     parser.add_argument('--eps', type=float, default=0.3,
                         help="max neighbor distance for DBSCAN")
+    parser.add_argument(
+        '--eps-all', type=float, default=None,
+        help="Stage-2 ALL DBSCAN eps; defaults to --eps")
+    parser.add_argument(
+        '--dbscan-backend', choices=('sklearn', 'fast'), default='sklearn',
+        help="DBSCAN implementation; default preserves sklearn behavior")
+    parser.add_argument(
+        '--dump-cluster-dist-epoch', type=int, default=-1,
+        help="zero-based Stage-2 epoch whose ALL distance matrix is saved")
     parser.add_argument('--eps-gap', type=float, default=0.02,
                         help="multi-scale criterion for measuring cluster reliability")
     parser.add_argument('--k1', type=int, default=30,

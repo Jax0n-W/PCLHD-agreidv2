@@ -79,6 +79,16 @@ def build_parser():
     parser.add_argument("--k1", type=int, default=30)
     parser.add_argument("--k2", type=int, default=6)
     parser.add_argument("--eps", type=float, default=DEFAULT_EPS)
+    parser.add_argument(
+        "--eps-all", type=float, default=None,
+        help="Stage-2 ALL DBSCAN eps; defaults to --eps")
+    parser.add_argument(
+        "--dbscan-backend", choices=("sklearn", "fast"),
+        default="sklearn",
+        help="DBSCAN implementation; sklearn preserves current behavior")
+    parser.add_argument(
+        "--dump-cluster-dist-epoch", type=int, default=-1,
+        help="zero-based Stage-2 epoch whose ALL distance matrix is saved")
     parser.add_argument("--lr", type=float, default=0.00035)
     parser.add_argument("--weight-decay", type=float, default=0.0005)
     parser.add_argument("--step-size", type=int, default=20)
@@ -146,6 +156,33 @@ def _append_eps_suffix(name, eps):
     return "{}{}".format(name, suffix)
 
 
+def resolve_eps_all(args):
+    value = getattr(args, "eps_all", None)
+    return float(args.eps if value is None else value)
+
+
+def eps_all_log_suffix(eps, eps_all):
+    value = float(eps if eps_all is None else eps_all)
+    if abs(value - float(eps)) < 1e-12:
+        return ""
+    return "_epsall{:g}".format(value)
+
+
+def _append_eps_all_suffix(name, eps, eps_all):
+    suffix = eps_all_log_suffix(eps, eps_all)
+    if not suffix or str(name).endswith(suffix):
+        return name
+    return "{}{}".format(name, suffix)
+
+
+def _append_stage2_eps_suffix(name, eps, eps_all):
+    suffix = eps_log_suffix(eps) + eps_all_log_suffix(eps, eps_all)
+    if not suffix or str(name).endswith(suffix):
+        return name
+    result = _append_eps_suffix(name, eps)
+    return _append_eps_all_suffix(result, eps, eps_all)
+
+
 def default_log_names(args, spec=None):
     spec = spec or get_experiment_spec(args.experiment)
     d_flag = int(spec["dynamic_agva"])
@@ -157,7 +194,8 @@ def default_log_names(args, spec=None):
         "{}_{}_d{}_t{}_channel_off_s2_seed{}".format(
             prefix, args.experiment, d_flag, t_flag, args.seed))
     stage1 = _append_eps_suffix(stage1, args.eps)
-    stage2 = _append_eps_suffix(stage2, args.eps)
+    stage2 = _append_stage2_eps_suffix(
+        stage2, args.eps, resolve_eps_all(args))
     return stage1, stage2
 
 
@@ -201,6 +239,8 @@ def _base_common_args(args, stage1_log_name, stage2_log_name):
         result.append("--allow-log-overwrite")
     if args.dataset_key != "agreid":
         result += ["--dataset-key", args.dataset_key]
+    if args.dbscan_backend != "sklearn":
+        result += ["--dbscan-backend", args.dbscan_backend]
     return result
 
 
@@ -248,6 +288,12 @@ def build_stage2_command(args, checkpoint, stage1_log_name=None,
             "--stage2-only", "--stage1-checkpoint", checkpoint,
             "--stage2-memorybank", "CMhard", "--no-ema-loss",
         ]
+        if args.eps_all is not None:
+            command += ["--eps-all", str(args.eps_all)]
+        if args.dump_cluster_dist_epoch >= 0:
+            command += [
+                "--dump-cluster-dist-epoch",
+                str(args.dump_cluster_dist_epoch)]
         return command
 
     command = [
@@ -293,6 +339,13 @@ def build_stage2_command(args, checkpoint, stage1_log_name=None,
     ]
     if args.allow_log_overwrite:
         command.append("--allow-log-overwrite")
+    if args.eps_all is not None:
+        command += ["--eps-all", str(args.eps_all)]
+    if args.dbscan_backend != "sklearn":
+        command += ["--dbscan-backend", args.dbscan_backend]
+    if args.dump_cluster_dist_epoch >= 0:
+        command += [
+            "--dump-cluster-dist-epoch", str(args.dump_cluster_dist_epoch)]
     return command
 
 
@@ -325,6 +378,11 @@ def validate_args(args):
         raise ValueError("invalid D-AGVA displacement range")
     if args.cluster_n_jobs < 1:
         raise ValueError("--cluster-n-jobs must be at least 1")
+    if (args.dump_cluster_dist_epoch < -1
+            or args.dump_cluster_dist_epoch >= args.epochs):
+        raise ValueError(
+            "--dump-cluster-dist-epoch must be -1 or a zero-based epoch "
+            "smaller than --epochs")
 
     if args.dry_run:
         return

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unified AG-ReID experiment entry point."""
+"""Unified AG-ReID entry point; CLI (including --eps-all) lives in runner."""
 from experiment_runner import run_experiment
 
 

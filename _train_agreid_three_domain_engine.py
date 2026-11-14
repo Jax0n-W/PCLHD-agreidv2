@@ -40,7 +40,10 @@ from clustercontrast.trainers_three_domain import \
     ClusterContrastTrainer_PCLMP_ThreeDomain
 from clustercontrast.utils.data import transforms as T
 from clustercontrast.utils.clustering import \
-    append_eps_log_suffix, build_agreid_three_domain_clusterers
+    append_stage2_eps_log_suffix, build_agreid_three_domain_clusterers, \
+    resolve_eps_all
+from clustercontrast.utils.fast_dbscan import \
+    dump_cluster_distance_if_requested
 from clustercontrast.utils.logging import Logger
 from clustercontrast.utils.serialization import save_checkpoint
 from clustercontrast.viewbridge import (VIEW_PATH_MODES, load_view_score_map,
@@ -165,6 +168,10 @@ def _validate_args(args):
             "--ground-global-min-low-size must be at least 1")
     if args.cluster_n_jobs < 1:
         raise ValueError("--cluster-n-jobs must be at least 1")
+    if (args.dump_cluster_dist_epoch < -1
+            or args.dump_cluster_dist_epoch >= args.epochs):
+        raise ValueError(
+            "--dump-cluster-dist-epoch must be -1 or smaller than --epochs")
     _resolve_sub_batch_sizes(args)
 
 
@@ -468,8 +475,10 @@ def main_worker_stage2(args):
     cluster_near = clusterers["near"]
     cluster_ground = clusterers["ground"]
     cluster_all = clusterers["all"]
-    print("Far/Near/Ground/ALL clustering initial eps: {:.3f}".format(
+    print("Far/Near/Ground clustering initial eps: {:.3f}".format(
         args.eps))
+    print("All Clustering criterion: eps: {:.3f}".format(
+        cluster_all.eps))
 
     best_r1 = 0.0
     best_map = 0.0
@@ -524,6 +533,9 @@ def main_worker_stage2(args):
             distance_all = baseline.compute_modal_invariant_jaccard_distance(
                 features_all, k1=40, k2=32, file=all_train,
                 search_option=3)
+            dump_cluster_distance_if_requested(
+                distance_all, epoch, args.dump_cluster_dist_epoch,
+                args.logs_dir)
             labels_all, num_all = _adaptive_cluster(
                 cluster_all, distance_all, "ALL")
             del distance_all
@@ -700,6 +712,16 @@ def build_parser():
     parser.add_argument("--width", type=int, default=144)
     parser.add_argument("--num-instances", type=int, default=16)
     parser.add_argument("--eps", type=float, default=0.3)
+    parser.add_argument(
+        "--eps-all", type=float, default=None,
+        help="Stage-2 ALL DBSCAN eps; defaults to --eps")
+    parser.add_argument(
+        "--dbscan-backend", choices=("sklearn", "fast"),
+        default="sklearn",
+        help="DBSCAN implementation; default preserves sklearn behavior")
+    parser.add_argument(
+        "--dump-cluster-dist-epoch", type=int, default=-1,
+        help="zero-based Stage-2 epoch whose ALL distance matrix is saved")
     parser.add_argument("--eps-gap", type=float, default=0.02)
     parser.add_argument("--k1", type=int, default=30)
     parser.add_argument("--k2", type=int, default=6)
@@ -776,8 +798,9 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(
         sys.argv[1:] if argv is None else argv)
-    args.stage2_log_name = append_eps_log_suffix(
-        args.stage2_log_name, args.eps)
+    args.eps_all = resolve_eps_all(args)
+    args.stage2_log_name = append_stage2_eps_log_suffix(
+        args.stage2_log_name, args.eps, args.eps_all)
     _validate_args(args)
     args.logs_root = osp.abspath(osp.expanduser(args.logs_dir))
     output_dir = get_stage2_output_directory(
@@ -793,6 +816,7 @@ def main(argv=None):
             args.ground_global_min_low_size))
     print("Low-memory clustering: sequential matrices, n_jobs={}".format(
         args.cluster_n_jobs))
+    print("DBSCAN backend: {}".format(args.dbscan_backend))
     print("Stage 2 AGVA/offline replacement: disabled")
     print("Stage 1: skipped; explicit checkpoint required")
     print("Stage 2 log name: {}".format(args.stage2_log_name))

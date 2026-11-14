@@ -12,7 +12,9 @@ if ROOT not in sys.path:
 
 import experiment_runner as runner
 from clustercontrast.utils.clustering import (
+    append_eps_all_log_suffix,
     append_eps_log_suffix,
+    append_stage2_eps_log_suffix,
     build_agreid_stage1_clusterers,
     build_agreid_stage2_clusterers,
     build_agreid_three_domain_clusterers,
@@ -21,7 +23,8 @@ from clustercontrast.utils.clustering import (
 
 class ClusteringEpsTests(unittest.TestCase):
     def setUp(self):
-        self.args = SimpleNamespace(eps=0.6, cluster_n_jobs=1)
+        self.args = SimpleNamespace(
+            eps=0.6, eps_all=0.3, cluster_n_jobs=1)
 
     def test_stage1_dbscan_uses_requested_eps(self):
         clusterers = build_agreid_stage1_clusterers(self.args)
@@ -31,16 +34,31 @@ class ClusteringEpsTests(unittest.TestCase):
     def test_stage2_dbscan_uses_requested_eps(self):
         clusterers = build_agreid_stage2_clusterers(self.args)
         self.assertEqual(set(clusterers), {"ir", "rgb", "all"})
-        self.assertTrue(all(item.eps == 0.6 for item in clusterers.values()))
+        self.assertEqual(clusterers["ir"].eps, 0.6)
+        self.assertEqual(clusterers["rgb"].eps, 0.6)
+        self.assertEqual(clusterers["all"].eps, 0.3)
 
     def test_three_domain_dbscan_uses_requested_eps(self):
         clusterers = build_agreid_three_domain_clusterers(self.args)
         self.assertEqual(set(clusterers), {"far", "near", "ground", "all"})
-        self.assertTrue(all(item.eps == 0.6 for item in clusterers.values()))
+        self.assertTrue(all(
+            clusterers[name].eps == 0.6
+            for name in ("far", "near", "ground")))
+        self.assertEqual(clusterers["all"].eps, 0.3)
 
-    def test_runner_forwards_eps_to_both_stages(self):
+    def test_eps_all_defaults_to_domain_eps(self):
+        args = SimpleNamespace(
+            eps=0.6, eps_all=None, cluster_n_jobs=1)
+        stage2 = build_agreid_stage2_clusterers(args)
+        three_domain = build_agreid_three_domain_clusterers(args)
+        self.assertTrue(all(item.eps == 0.6 for item in stage2.values()))
+        self.assertTrue(all(
+            item.eps == 0.6 for item in three_domain.values()))
+
+    def test_runner_forwards_eps_all_only_to_stage2(self):
         args = runner.build_parser().parse_args([
-            "--experiment", "baseline", "--eps", "0.6", "--dry-run"])
+            "--experiment", "baseline", "--eps", "0.6",
+            "--eps-all", "0.3", "--dry-run"])
         stage1_name, stage2_name = runner.default_log_names(args)
         stage1 = runner.build_stage1_command(
             args, stage1_name, stage2_name)
@@ -49,22 +67,48 @@ class ClusteringEpsTests(unittest.TestCase):
             stage1_name, stage2_name)
         self.assertEqual(stage1[stage1.index("--eps") + 1], "0.6")
         self.assertEqual(stage2[stage2.index("--eps") + 1], "0.6")
+        self.assertNotIn("--eps-all", stage1)
+        self.assertEqual(stage2[stage2.index("--eps-all") + 1], "0.3")
 
     def test_nondefault_eps_isolated_in_log_names(self):
         default_args = runner.build_parser().parse_args([
             "--experiment", "baseline", "--dry-run"])
         tuned_args = runner.build_parser().parse_args([
-            "--experiment", "baseline", "--eps", "0.6", "--dry-run"])
+            "--experiment", "baseline", "--eps", "0.6",
+            "--eps-all", "0.3", "--dry-run"])
         default_names = runner.default_log_names(default_args)
         tuned_names = runner.default_log_names(tuned_args)
         self.assertTrue(all("_eps" not in name for name in default_names))
-        self.assertTrue(all(name.endswith("_eps0.6") for name in tuned_names))
+        self.assertTrue(tuned_names[0].endswith("_eps0.6"))
+        self.assertTrue(tuned_names[1].endswith("_eps0.6_epsall0.3"))
         self.assertEqual(
             append_eps_log_suffix("direct_engine", 0.6),
             "direct_engine_eps0.6")
         self.assertEqual(
             append_eps_log_suffix("direct_engine_eps0.6", 0.6),
             "direct_engine_eps0.6")
+        self.assertEqual(
+            append_eps_all_log_suffix("direct_engine_eps0.6", 0.6, 0.3),
+            "direct_engine_eps0.6_epsall0.3")
+        self.assertEqual(
+            append_stage2_eps_log_suffix(
+                "direct_engine_eps0.6_epsall0.3", 0.6, 0.3),
+            "direct_engine_eps0.6_epsall0.3")
+
+    def test_omitted_eps_all_keeps_existing_names_and_commands(self):
+        args = runner.build_parser().parse_args([
+            "--experiment", "baseline", "--eps", "0.6", "--dry-run"])
+        stage1_name, stage2_name = runner.default_log_names(args)
+        stage1 = runner.build_stage1_command(
+            args, stage1_name, stage2_name)
+        stage2 = runner.build_stage2_command(
+            args, osp.join(ROOT, "synthetic_stage1.pth.tar"),
+            stage1_name, stage2_name)
+        self.assertEqual(args.eps_all, None)
+        self.assertTrue(stage1_name.endswith("_eps0.6"))
+        self.assertTrue(stage2_name.endswith("_eps0.6"))
+        self.assertNotIn("--eps-all", stage1)
+        self.assertNotIn("--eps-all", stage2)
 
     def test_internal_engine_defaults_are_point_three(self):
         with open(osp.join(ROOT, "_train_agreid_engine.py"),
@@ -79,6 +123,9 @@ class ClusteringEpsTests(unittest.TestCase):
         self.assertIn(
             'parser.add_argument("--eps", type=float, default=0.3)',
             three_domain_source)
+        self.assertIn("'--eps-all', type=float, default=None", baseline_source)
+        self.assertIn(
+            '"--eps-all", type=float, default=None', three_domain_source)
 
 
 if __name__ == "__main__":
